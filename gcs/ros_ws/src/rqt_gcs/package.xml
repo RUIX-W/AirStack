@@ -1,7 +1,7 @@
 <package format="2">
-  <name>rqt_ground_control_station</name>
+  <name>rqt_gcs</name>
   <version>1.0.2</version>
-  <description>rqt_ground_control_station is a Python GUI template.</description>
+  <description>rqt_gcs is a Python GUI template.</description>
   <maintainer email="jkeller2@andrew.cmu.edu">John Keller</maintainer>
 
   <license>BSD</license>
@@ -21,8 +21,8 @@
   <exec_depend>rqt_gui_py</exec_depend>
 
   <export>
-    <architecture_independent/>
-    <rqt_gui plugin="${prefix}/plugin.xml"/>
+    <architecture_independent />
+    <rqt_gui plugin="${prefix}/plugin.xml" />
     <build_type>ament_python</build_type>
   </export>
 </package>

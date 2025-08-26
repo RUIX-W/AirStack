@@ -2,13 +2,15 @@
 
 The Ground Control Station (GCS) is for operators to monitor and control the robots.
 
-Requirements: 
+Requirements:
+
 - 60GB Hard Disk Space
 - min 8GB RAM
 - min 4 CPU Cores
 - Ubuntu 22.04
 
-## Setup 
+## Setup
+
 WinTAK is setup as auto start on boot and connects to Airlabs TAK-Server. It runs on a Windows 11 VirtualBox Virtual Machine.
 
 ![Setup](asset/setup.png)
@@ -35,9 +37,9 @@ Alternatively, you can run the setup script directly:
 
 ```bash
 # Move to the directory:
-cd ground_control_station/installation
+cd gcs/installation
 # Execute the script
-./setup_ground_control_station.sh
+./setup_gcs.sh
 ```
 
 ### Starting and Stopping WinTAK
@@ -57,4 +59,5 @@ Once installed, you can start and stop WinTAK using the AirStack CLI:
 ![WinTAK](asset/WinTAK_on_windows_virtualbox_vm.png)
 
 ## Know more about TAK using the youtube link below:
+
 [![Video Title](https://img.youtube.com/vi/fiBt0wEiKh8/0.jpg)](https://www.youtube.com/watch?v=fiBt0wEiKh8&t=1s)

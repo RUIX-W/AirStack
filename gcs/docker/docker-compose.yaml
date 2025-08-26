@@ -4,7 +4,7 @@ services:
       - ""
       - sitl
     extends:
-      file: ./ground-control-station-base-docker-compose.yaml
+      file: ./gcs-base-docker-compose.yaml
       service: gcs-base
     networks:
       - airstack_network
@@ -18,7 +18,7 @@ services:
       - hitl
       - deploy
     extends:
-      file: ./ground-control-station-base-docker-compose.yaml
+      file: ./gcs-base-docker-compose.yaml
       service: gcs-base
     network_mode: host
     volumes:

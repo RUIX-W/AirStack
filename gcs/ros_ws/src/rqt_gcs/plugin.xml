@@ -1,5 +1,6 @@
 <library path="src">
-  <class name="GroundControlStation" type="rqt_ground_control_station.template.GroundControlStation" base_class_type="rqt_gui_py::Plugin">
+  <class name="GroundControlStation" type="rqt_gcs.template.GroundControlStation"
+    base_class_type="rqt_gui_py::Plugin">
     <description>
       A Python GUI plugin providing an interactive Python console.
     </description>
