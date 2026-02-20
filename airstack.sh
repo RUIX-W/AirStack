@@ -118,6 +118,21 @@ function print_command_help {
             echo "  --build       Build images before starting containers"
             echo "  --recreate    Recreate containers even if their configuration and image haven't changed"
             ;;
+        build)
+            echo "Usage: airstack build [service_name...] [options]"
+            echo ""
+            echo "Build or rebuild Docker Compose services. Passes ENV variables from .env"
+            echo "and any prepended environment variables (e.g. DOCKER_IMAGE_TAG=x airstack build robot)."
+            echo ""
+            echo "Options:"
+            echo "  --no-cache         Do not use cache when building the image"
+            echo "  --pull             Always attempt to pull a newer version of the image"
+            echo "  --push             Push service images"
+            echo "  --progress=VALUE   Set type of progress output (auto, tty, plain, json, quiet)"
+            echo "  --env-file         Specify an alternate environment file"
+            echo ""
+            echo "Any additional flags are passed directly to 'docker compose build'."
+            ;;
         connect)
             echo "Usage: airstack connect [container_name] [options]"
             echo ""
@@ -147,6 +162,18 @@ function print_command_help {
             echo "Usage: airstack version"
             echo ""
             echo "Display the current AirStack version from DOCKER_IMAGE_TAG in .env file."
+            ;;
+        rmi)
+            echo "Usage: airstack rmi [flags] <search_term>"
+            echo ""
+            echo "Remove Docker images whose tag matches the given search term."
+            echo ""
+            echo "Options:"
+            echo "  -f    Force removal of the image"
+            echo ""
+            echo "Examples:"
+            echo "  airstack rmi myimage"
+            echo "  airstack rmi -f myimage"
             ;;
         test)
             echo "Usage: airstack test [options]"
@@ -236,7 +263,8 @@ function ensure_cli_container {
     # Check if image exists
     if ! docker image inspect "$image_name" &> /dev/null; then
         log_info "Building airstack-cli container (version $version)..."
-        if ! docker build -f "$dockerfile_path" -t "$image_name" "$PROJECT_ROOT"; then
+        if ! docker build -f "$dockerfile_path" \
+            -t "$image_name" "$PROJECT_ROOT"; then
             log_error "Failed to build airstack-cli container"
             exit 1
         fi
@@ -253,6 +281,10 @@ function run_docker_compose {
     # This allows command-line overrides like: ISAAC_SIM_USE_STANDALONE=true airstack up
     local env_args=()
     local env_file="$PROJECT_ROOT/.env"
+
+    # add the UID and GID to env_args so they are passed to the container and can be used for file permissions
+    env_args+=("-e" "USER_ID=$(id -u)")
+    env_args+=("-e" "GROUP_ID=$(id -g)")
     
     if [ -f "$env_file" ]; then
         # Extract variable names from .env file (lines that start with a letter/underscore)
@@ -629,7 +661,7 @@ function cmd_setup {
         fi
     fi
 
-    echo "Making sure git submodules are initialized and updated..."
+    log_info "Making sure git submodules are initialized and updated..."
     git submodule update --init --recursive || log_warn "Failed to update git submodules. Some packages may not launch, please check your git credentials."
     
     log_info "Setup complete!"
@@ -691,6 +723,17 @@ function cmd_up {
 
     # Add xhost + to allow GUI applications
     xhost + &> /dev/null || true
+
+    # Pre-create bind mount directories as the host user before docker compose runs.
+    # If these don't exist, the Docker daemon (running as root) will create them as root.
+    mkdir -p "$HOME/.cache" \
+        "$HOME/.nv/ComputeCache" \
+        "$HOME/.nvidia-omniverse/logs" \
+        "$HOME/.nvidia-omniverse/config" \
+        "$HOME/.local/share/ov/data" \
+        "$HOME/.local/share/ov/pkg" \
+        "$HOME/.local/share/ov/data/documents/Kit/shared/exts"
+
 
     log_info "Starting services with containerized docker-compose..."
     run_docker_compose "${compose_args[@]}"
@@ -853,12 +896,43 @@ function cmd_version {
     echo -e "${BOLDCYAN}AirStack Version:${NC} $version"
 }
 
+function cmd_rmi {
+    check_docker
+    
+    if [ $# -eq 0 ]; then
+        log_error "Search term required"
+        print_command_help "rmi"
+        exit 1
+    fi
+    
+    local search_term=""
+    local rmi_flags=()
+    
+    for arg in "$@"; do
+        if [[ "$arg" == -* ]]; then
+            rmi_flags+=("$arg")
+        else
+            search_term="$arg"
+        fi
+    done
+    
+    if [ -z "$search_term" ]; then
+        log_error "Search term required"
+        print_command_help "rmi"
+        exit 1
+    fi
+    
+    log_info "Removing images matching: $search_term"
+    docker images -a | grep "$search_term" | awk '{print $2}' | xargs docker rmi "${rmi_flags[@]}"
+}
+
 function cmd_rebuild_cli {
     log_info "Rebuilding airstack-cli container..."
     
     local version=$(get_docker_image_tag)
     local image_name="airstack-cli:v$version"
     local dockerfile_path="$PROJECT_ROOT/Dockerfile.airstack-cli"
+    local host_docker_group_id=$(getent group docker | cut -d: -f3)
     
     if [ ! -f "$dockerfile_path" ]; then
         log_error "Dockerfile.airstack-cli not found at $dockerfile_path"
@@ -873,7 +947,7 @@ function cmd_rebuild_cli {
     
     # Build new image
     log_info "Building new airstack-cli image (version $version)..."
-    if docker build -f "$dockerfile_path" -t "$image_name" "$PROJECT_ROOT"; then
+    if docker build -f "$dockerfile_path" --build-arg HOST_DOCKER_GROUP_ID="$host_docker_group_id" -t "$image_name" "$PROJECT_ROOT"; then
         log_info "airstack-cli container rebuilt successfully"
         
         # Show the new compose version
@@ -924,6 +998,7 @@ function register_builtin_commands {
     COMMANDS["logs"]="cmd_logs"
     COMMANDS["version"]="cmd_version"
     COMMANDS["rebuild-cli"]="cmd_rebuild_cli"
+    COMMANDS["rmi"]="cmd_rmi"
     COMMANDS["help"]="cmd_help"
     
     # Register help text for built-in commands
@@ -936,6 +1011,7 @@ function register_builtin_commands {
     COMMAND_HELP["logs"]="View logs for a container (supports partial name matching)"
     COMMAND_HELP["version"]="Display the current AirStack version"
     COMMAND_HELP["rebuild-cli"]="Rebuild the containerized docker-compose CLI tool"
+    COMMAND_HELP["rmi"]="Remove Docker images by search term"
     COMMAND_HELP["help"]="Show help information"
 }
 
