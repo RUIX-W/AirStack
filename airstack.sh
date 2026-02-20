@@ -740,6 +740,59 @@ function cmd_up {
     log_info "Services brought up successfully"
 }
 
+function cmd_build {
+    check_docker
+
+    local env_files=()
+    local other_args=()
+
+    # Convert arguments to array for easier processing
+    local args=("$@")
+    local i=0
+
+    while [ $i -lt ${#args[@]} ]; do
+        local arg="${args[$i]}"
+
+        if [[ "$arg" == "--env-file" ]]; then
+            # Get the next argument as the env file path
+            i=$((i+1))
+            if [ $i -lt ${#args[@]} ]; then
+                env_files+=("--env-file" "${args[$i]}")
+            else
+                log_error "Missing value for --env-file argument"
+                return 1
+            fi
+        elif [[ "$arg" == "--env-file="* ]]; then
+            # Handle --env-file=path format
+            env_files+=("$arg")
+        else
+            other_args+=("$arg")
+        fi
+
+        i=$((i+1))
+    done
+
+    # Build compose arguments array
+    local compose_args=("-f" "$PROJECT_ROOT/docker-compose.yaml")
+
+    # Add all env files
+    for env_file in "${env_files[@]}"; do
+        compose_args+=("$env_file")
+    done
+
+    # Add the 'build' command
+    compose_args+=("build")
+
+    # Add service names and other arguments
+    if [ ${#other_args[@]} -gt 0 ]; then
+        compose_args+=("${other_args[@]}")
+    fi
+
+    log_info "Building services with containerized docker-compose..."
+    run_docker_compose "${compose_args[@]}"
+    log_info "Build completed successfully"
+}
+
 function cmd_down {
     check_docker
     
@@ -991,6 +1044,7 @@ declare -A COMMAND_HELP
 function register_builtin_commands {
     COMMANDS["install"]="cmd_install"
     COMMANDS["setup"]="cmd_setup"
+    COMMANDS["build"]="cmd_build"
     COMMANDS["up"]="cmd_up"
     COMMANDS["down"]="cmd_down"
     COMMANDS["connect"]="cmd_connect"
@@ -1004,6 +1058,7 @@ function register_builtin_commands {
     # Register help text for built-in commands
     COMMAND_HELP["install"]="Install dependencies (Docker Engine, NVIDIA Container Toolkit)"
     COMMAND_HELP["setup"]="Configure AirStack settings and add to shell profile"
+    COMMAND_HELP["build"]="Build or rebuild Docker Compose service images"
     COMMAND_HELP["up"]="Start services using Docker Compose"
     COMMAND_HELP["down"]="down services"
     COMMAND_HELP["connect"]="Connect to a running container (supports partial name matching)"
