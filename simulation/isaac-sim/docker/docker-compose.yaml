@@ -27,7 +27,7 @@ services:
     privileged: true
     networks:
       airstack_network:
-        ipv4_address: 172.31.0.200
+        ipv4_address: 10.199.0.200
     env_file:
       - ./omni_pass.env
     environment:
@@ -35,6 +35,7 @@ services:
       - ACCEPT_EULA=Y
       - DISPLAY
       - QT_X11_NO_MITSHM=1
+      - XAUTHORITY=/tmp/.docker.xauth
       # ROS2 stuff
       - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
       - FASTRTPS_DEFAULT_PROFILES_FILE=/isaac-sim/fastdds.xml
@@ -48,7 +49,7 @@ services:
               capabilities: [gpu]
     volumes:
       # display
-      - $HOME/.Xauthority:/root/.Xauthority
+      - /tmp/.docker.xauth:/tmp/.docker.xauth:ro
       - /tmp/.X11-unix:/tmp/.X11-unix
       # isaac sim stuff
       - ./isaac_sim_data/cache/kit:/isaac-sim/kit/cache:rw

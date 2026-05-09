@@ -9,6 +9,7 @@ services:
     environment:
       - DISPLAY
       - QT_X11_NO_MITSHM=1
+      - XAUTHORITY=/tmp/.docker.xauth
       # docker compose interpolation to env variables
       - AUTONOMY_LAUNCH_PACKAGE=${AUTONOMY_LAUNCH_PACKAGE}
       - AUTONOMY_LAUNCH_FILE=${AUTONOMY_LAUNCH_FILE}
@@ -42,7 +43,7 @@ services:
               capabilities: [gpu]
     volumes:
       # display stuff
-      - $HOME/.Xauthority:/.Xauthority
+      - /tmp/.docker.xauth:/tmp/.docker.xauth:ro
       - /tmp/.X11-unix:/tmp/.X11-unix
       # developer stuff
       - .dev:/home/robot/.dev:rw # developer config

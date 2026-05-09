@@ -559,8 +559,56 @@ function cmd_up {
     # Add -d flag
     cmd="$cmd -d"
 
+    # Prepare X11 forwarding for Docker containers.
+    # SSH -Y sets DISPLAY=localhost:N; the proxy only binds to 127.0.0.1, unreachable from
+    # bridge-network containers. Plan: rewrite DISPLAY to use the bridge gateway IP, create a
+    # wildcard xauth cookie, then start a socat forwarder AFTER docker compose creates the
+    # bridge interface (the interface doesn't exist until compose runs).
+    local docker_xauth="/tmp/.docker.xauth"
+    local socat_pid_file="/tmp/.airstack_x11_socat.pid"
+    local docker_gateway_ip="10.199.0.1"
+    local do_x11_forward=false
+    local xport=""
+
+    if [[ -n "$DISPLAY" && "$DISPLAY" == localhost:* ]]; then
+        local display_num="${DISPLAY#localhost:}"
+        display_num="${display_num%%.*}"   # "10.0" -> "10"
+        xport=$((6000 + display_num))
+
+        # Build wildcard xauth from the ORIGINAL localhost display before rewriting
+        touch "$docker_xauth"
+        if command -v xauth &>/dev/null; then
+            xauth nlist "$DISPLAY" 2>/dev/null | sed -e 's/^..../ffff/' \
+                | xauth -f "$docker_xauth" nmerge - 2>/dev/null || true
+        fi
+
+        # Rewrite DISPLAY so containers target the bridge gateway
+        export DISPLAY="${docker_gateway_ip}:${DISPLAY#localhost:}"
+
+        if command -v socat &>/dev/null; then
+            do_x11_forward=true
+            # Kill any stale forwarder from a previous run
+            if [[ -f "$socat_pid_file" ]]; then
+                kill "$(cat "$socat_pid_file")" 2>/dev/null || true
+                rm -f "$socat_pid_file"
+            fi
+        else
+            log_warn "socat not found — X11 windows will not forward to containers."
+            log_warn "Fix: sudo apt install socat   OR   add 'X11UseLocalhost no' to /etc/ssh/sshd_config"
+        fi
+    fi
+
     log_info "Executing: $cmd"
-    eval "USER_ID=$(id -u) GROUP_ID=$(id -g) $cmd"
+    eval "USER_ID=$(id -u) GROUP_ID=$(id -g) XAUTHORITY=$docker_xauth $cmd"
+
+    # Start socat AFTER compose so the bridge interface (10.199.0.1) already exists
+    if [[ "$do_x11_forward" == true ]]; then
+        socat TCP-LISTEN:${xport},bind=${docker_gateway_ip},reuseaddr,fork \
+              TCP:127.0.0.1:${xport} >/dev/null 2>&1 &
+        echo $! > "$socat_pid_file"
+        log_info "Started X11 forwarder: ${docker_gateway_ip}:${xport} -> 127.0.0.1:${xport} (pid $(cat $socat_pid_file))"
+    fi
+
     log_info "Services brought up successfully"
 }
 
@@ -579,6 +627,15 @@ function cmd_down {
     
     log_info "Shutting down services: ${services[*]:-all}"
     eval "USER_ID=$(id -u) GROUP_ID=$(id -g) $cmd"
+
+    # Clean up the X11 socat forwarder started by cmd_up
+    local socat_pid_file="/tmp/.airstack_x11_socat.pid"
+    if [[ -f "$socat_pid_file" ]]; then
+        kill "$(cat "$socat_pid_file")" 2>/dev/null || true
+        rm -f "$socat_pid_file"
+        log_info "Stopped X11 forwarder"
+    fi
+
     log_info "Services shutdown successfully"
 }
 
