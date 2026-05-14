@@ -1,7 +1,7 @@
 services:
   isaac-sim:
     profiles:
-      - isaac-sim
+      - isaac-sim-direct
     image: &image_tag ${PROJECT_DOCKER_REGISTRY}/${PROJECT_NAME}:v${VERSION}_isaac-sim
     build:
       context: ../
@@ -28,20 +28,21 @@ services:
     tty: true # docker run -t
     ipc: host
     privileged: true
-    networks:
-      airstack_network:
-        ipv4_address: 172.31.0.200 # required to not conflict with other default docker networks on the host machine
+    network_mode: host
     env_file:
       - ./omni_pass.env
     environment:
       - AUTOLAUNCH=${AUTOLAUNCH:-'false'}
       - DISPLAY=${DISPLAY}
+      - XAUTHORITY=/isaac-sim/.Xauthority
       - QT_X11_NO_MITSHM=1
       # Isaac Sim stuff
       - PLAY_SIM_ON_START=${PLAY_SIM_ON_START}
       - NUM_ROBOTS=${NUM_ROBOTS:-1}
       - ENABLE_LIDAR=${ENABLE_LIDAR:-false}
       - ISAAC_SIM_HEADLESS=${ISAAC_SIM_HEADLESS:-false}
+      - SCENE_EXPORT_USD_PATH=${SCENE_EXPORT_USD_PATH:-}
+      - SCENE_EXPORT_STATIC_ONLY=${SCENE_EXPORT_STATIC_ONLY:-true}
       # Pegasus physics tuning — read by pegasus/simulator/params.py
       - PX4_PHYSICS_HZ=${PX4_PHYSICS_HZ:-100}
       - ARDUPILOT_PHYSICS_HZ=${ARDUPILOT_PHYSICS_HZ:-800}
@@ -71,6 +72,7 @@ services:
       # omniverse
       - ./omniverse.toml:/isaac-sim/.nvidia-omniverse/config/omniverse.toml:rw
       - ./user.config.json:/isaac-sim/.local/share/ov/data/Kit/Isaac-Sim Full/5.1/user.config.json:rw # enables pegasus extension; IMPORTANT: set the version number without the trailing .0
+      - ./user.config.json:/isaac-sim/.local/share/ov/data/Kit/Isaac-Sim Streaming/5.1/user.config.json:rw # enables pegasus extension for WebRTC streaming
       # developer stuff
       - .dev:/isaac-sim/.dev:rw # developer config
       - .bashrc:/isaac-sim/.bashrc:rw # bash config
@@ -94,6 +96,86 @@ services:
         tmux send-keys -t isaac '/isaac-sim/runapp.sh' ENTER; 
       sleep infinity"
     networks: !reset null
+
+  # ===================================================================================================================
+  # Headless Isaac Sim streaming for the browser-based NVIDIA WebRTC viewer.
+  # NVIDIA's container docs recommend host networking for WebRTC streaming so
+  # the client can reach the signaling and media endpoints directly.
+  isaac-sim-webrtc:
+    extends:
+      service: isaac-sim
+    container_name: isaac-sim-webrtc
+    profiles: !override
+      - isaac-sim
+      - webrtc
+    depends_on:
+      - isaac-sim-webrtc-viewer
+    network_mode: host
+    networks: !reset null
+    command: >
+      bash -lc "
+      tmux new -d -s isaac;
+      PUBLIC_IP=\"${ISAAC_SIM_WEBRTC_PUBLIC_IP:-}\";
+      if [ -z \"$$PUBLIC_IP\" ]; then
+        PUBLIC_IP=$$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($$i == \"src\") {print $$(i+1); exit}}');
+      fi;
+      if [ -z \"$$PUBLIC_IP\" ]; then
+        PUBLIC_IP=$$(hostname -I | awk '{print $$1}');
+      fi;
+      WEBRTC_ARGS=\"--/exts/omni.kit.livestream.app/primaryStream/signalPort=${ISAAC_SIM_WEBRTC_SIGNAL_PORT:-49100} --/exts/omni.kit.livestream.app/primaryStream/streamPort=${ISAAC_SIM_WEBRTC_STREAM_PORT:-47998}\";
+      if [ -n \"$$PUBLIC_IP\" ]; then
+        WEBRTC_ARGS=\"$$WEBRTC_ARGS --/exts/omni.kit.livestream.app/primaryStream/publicIp=$$PUBLIC_IP\";
+      fi;
+      if [ \"${ISAAC_SIM_USE_STANDALONE}\" = 'true' ]; then
+        tmux send-keys -t isaac \"run_isaac_python /isaac-sim/AirStack/simulation/isaac-sim/launch_scripts/${ISAAC_SIM_SCRIPT_NAME} --ext-folder ~/.local/share/ov/data/documents/Kit/shared/exts\" ENTER;
+      else
+        tmux send-keys -t isaac \"source /isaac-sim/jazzy_ws/install/setup.bash && ros2 launch isaacsim run_isaacsim.launch.py install_path:=/isaac-sim headless:=webrtc gui:='${ISAAC_SIM_GUI}' play_sim_on_start:='${PLAY_SIM_ON_START}' custom_args:=\\\"$$WEBRTC_ARGS\\\"\" ENTER;
+      fi;
+      sleep infinity"
+    environment:
+      - ISAAC_SIM_HEADLESS=true
+      - DISPLAY=
+      - XAUTHORITY=
+      - ISAAC_SIM_WEBRTC_PUBLIC_IP=${ISAAC_SIM_WEBRTC_PUBLIC_IP:-}
+      - ISAAC_SIM_WEBRTC_SIGNAL_PORT=${ISAAC_SIM_WEBRTC_SIGNAL_PORT:-49100}
+      - ISAAC_SIM_WEBRTC_STREAM_PORT=${ISAAC_SIM_WEBRTC_STREAM_PORT:-47998}
+
+  # Browser UI for Isaac Sim WebRTC streaming. Open this at
+  # http://<docker-host-ip>:8210; video still uses the host-networked WebRTC ports.
+  isaac-sim-webrtc-viewer:
+    profiles:
+      - isaac-sim
+      - webrtc
+    build:
+      context: ./web-viewer
+      network: host
+      args:
+        ISAAC_SIM_WEBRTC_SIGNAL_PORT: ${ISAAC_SIM_WEBRTC_SIGNAL_PORT:-49100}
+        ISAAC_SIM_WEBRTC_STREAM_PORT: ${ISAAC_SIM_WEBRTC_STREAM_PORT:-47998}
+    container_name: isaac-sim-webrtc-viewer
+    network_mode: host
+    command:
+      - bash
+      - -lc
+      - |
+        VIEWER_HOST="${ISAAC_SIM_WEBRTC_VIEWER_HOST:-}";
+        if [ -z "$$VIEWER_HOST" ]; then
+          VIEWER_HOST=$$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($$i == "src") {print $$(i+1); exit}}');
+        fi;
+        if [ -z "$$VIEWER_HOST" ]; then
+          VIEWER_HOST=$$(hostname -I | awk '{print $$1}');
+        fi;
+        exec npx vite preview --host "$$VIEWER_HOST" --port "${ISAAC_SIM_WEBRTC_VIEWER_PORT:-8210}" --strictPort
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "VIEWER_HOST=\"$${ISAAC_SIM_WEBRTC_VIEWER_HOST:-}\"; if [ -z \"$$VIEWER_HOST\" ]; then VIEWER_HOST=$$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($$i == \"src\") {print $$(i+1); exit}}'); fi; if [ -z \"$$VIEWER_HOST\" ]; then VIEWER_HOST=$$(hostname -I | awk '{print $$1}'); fi; curl -f \"http://$$VIEWER_HOST:${ISAAC_SIM_WEBRTC_VIEWER_PORT:-8210}/\" || exit 1"
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
   # ===================================================================================================================
   # for running over ethernet for hitl to stream to the NVIDIA jetson device
   # isaac-sim-hitl:

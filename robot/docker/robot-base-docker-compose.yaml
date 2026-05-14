@@ -8,6 +8,7 @@ services:
     privileged: true
     environment:
       - DISPLAY=${DISPLAY}
+      - XAUTHORITY=/.Xauthority
       - QT_X11_NO_MITSHM=1
       - QT_QPA_PLATFORM
       # Record bags
@@ -38,4 +39,3 @@ services:
       - ../ros_ws:/root/AirStack/robot/ros_ws:rw
       # bags
       - ../bags:/bags:rw
-

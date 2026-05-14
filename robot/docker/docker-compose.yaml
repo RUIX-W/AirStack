@@ -25,25 +25,21 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=all
       - LAUNCH_PACKAGE=desktop_bringup  # desktop_bringup adds RViz; real robots use autonomy_bringup
       - AUTONOMY_ROLE=full
-      - SIM_IP=${SIM_IP:-172.31.0.200}
+      - ROBOT_NAME=${ROBOT_NAME:-robot_1}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-1}
+      - SIM_IP=${SIM_IP:-127.0.0.1}
+      - ROBOT_ENABLE_SSH=${ROBOT_ENABLE_SSH:-false}
       # FCU_URL and TGT_SYSTEM not set, dynamically calculated in interface.launch.py
     # 'command' uses variables so that it can be shared across robot-desktop and robot-l4t, with different launch packages and roles.
     command: >
       bash -c "
-      service ssh restart;
+      if [ \"$${ROBOT_ENABLE_SSH:-false}\" = 'true' ]; then service ssh restart; fi;
       tmux new -d -s bringup;
       if [ $$AUTOLAUNCH == 'true' ]; then
         tmux send-keys -t bringup:0.0 'bws && sws && ros2 launch $$LAUNCH_PACKAGE robot.launch.xml role:=$$AUTONOMY_ROLE' ENTER;
       fi;
       sleep infinity"
-    # assumes you're connected to work internet, so creates a network to isolate from other developers on your work internet
-    networks:
-      - airstack_network
-    # allow scaling multiple robots on the same machine
-    ports:
-      # for ssh, starting from 2223-2243 on the host port all map to 22 in the container. Assumes no more than 21 robots
-      - "2223-2243:22"
-      - "8767-8787:8765" # for Foxglove remote display (range supports up to 21 robots; GCS uses 8766)
+    network_mode: host
     # for multiple robots
     deploy:
       replicas: ${NUM_ROBOTS:-1}
@@ -93,6 +89,7 @@ services:
     ports: !reset {}  # offboard containers don't need ssh ports
     environment:
       - ROBOT_NAME_SOURCE=container_name  # robot_name_map resolves replica index → robot_N
+      - ROBOT_NAME=
       - ROS_DOMAIN_ID=0                   # all offboard containers share domain 0; domain_bridge connects to per-robot onboard domains
       - LAUNCH_PACKAGE=autonomy_bringup   # no RViz per-robot; visualization lives in the GCS container
       - AUTONOMY_ROLE=offboard            # runs global planner only

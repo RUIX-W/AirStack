@@ -88,6 +88,7 @@ For detailed step-by-step instructions, refer to the **`.agents/skills/`** direc
 | [integrate-module-into-layer](.agents/skills/integrate-module-into-layer) | Adding module to layer bringup |
 | [write-launch-file](.agents/skills/write-launch-file) | Authoring ROS 2 launch files with AirStack conventions (ROBOT_NAME namespacing, topic remapping, allow_substs) |
 | [write-isaac-sim-scene](.agents/skills/write-isaac-sim-scene) | Creating custom simulation scenes |
+| [isaac-sim-webrtc-streaming](.agents/skills/isaac-sim-webrtc-streaming) | Enabling browser WebRTC streaming for standalone Python scenes (port 49100, `enable_extension` pattern, docker-compose wiring) |
 | [debug-module](.agents/skills/debug-module) | Autonomous debugging of ROS 2 modules |
 | [update-documentation](.agents/skills/update-documentation) | Documenting new modules and updating mkdocs |
 | [test-in-simulation](.agents/skills/test-in-simulation) | End-to-end simulation testing of a module |
@@ -338,6 +339,8 @@ Each major component has its own Docker container:
 Multi-robot is implemented via Docker Compose **replicas**, not multiple namespaces in one container. Setting `NUM_ROBOTS=3` in [`.env`](.env) spawns three separate containers (`airstack-robot-desktop-1`, `-2`, `-3`) via `deploy.replicas: ${NUM_ROBOTS:-1}` in [`robot/docker/docker-compose.yaml`](robot/docker/docker-compose.yaml).
 
 `ROBOT_NAME` is **not** set directly in `.env`. Each container computes it at startup: [`robot/docker/.bashrc`](robot/docker/.bashrc) reads `ROBOT_NAME_SOURCE` (`container_name` or `hostname`) and runs [`resolve_robot_name.py`](robot/docker/robot_name_map/resolve_robot_name.py) against the mapping in [`robot/docker/robot_name_map/`](robot/docker/robot_name_map/) (default: [`default_robot_name_map.yaml`](robot/docker/robot_name_map/default_robot_name_map.yaml)). The resolver exports both `ROBOT_NAME` and `ROS_DOMAIN_ID` — robot N gets domain N by default, so each robot is on its own DDS partition.
+
+When a service uses `network_mode: host`, container-name discovery from inside the container can resolve to the host name instead of the Compose container name. For host-networked desktop services, set `ROBOT_NAME`/`ROS_DOMAIN_ID` explicitly in Compose; [`robot/docker/.bashrc`](robot/docker/.bashrc) honors those values and skips the mapping resolver.
 
 The autonomy bringup variant is selected by `AUTONOMY_ROLE` (`full` | `onboard` | `offboard`), dispatched in [`robot/ros_ws/src/autonomy_bringup/launch/robot.launch.xml`](robot/ros_ws/src/autonomy_bringup/launch/robot.launch.xml):
 

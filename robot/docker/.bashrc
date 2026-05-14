@@ -70,7 +70,9 @@ source /opt/ros/jazzy/setup.bash
 sws # source the ROS2 workspace by default
 
 # Only extract robot name and ROS domain ID iff they are not already set in the environment (e.g. by docker compose)
-if [ "$ROBOT_NAME_SOURCE" == "container_name" ]; then
+if [ -n "$ROBOT_NAME" ]; then
+    name_to_map=""
+elif [ "$ROBOT_NAME_SOURCE" == "container_name" ]; then
     # https://wiki.psuter.ch/doku.php?id=get_docker_container_name_from_within_the_container
     # WARNING: this technique ONLY works with docker version 29 and up.
     name_to_map=$(host $(host $(hostname) | awk '{print $NF}') | awk '{print $NF}' | awk -F . '{print $1}')
@@ -219,4 +221,3 @@ fi
 
 
 export RCUTILS_COLORIZED_OUTPUT=1  # get colored output from ROS2 tools
-
