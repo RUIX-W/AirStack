@@ -11,14 +11,15 @@ Demonstrates:
  - Optionally saving the prepared scene as a self-contained USD
 """
 
+import os
 import carb
 from isaacsim import SimulationApp
 
 # Must be created before any omni imports
-simulation_app = SimulationApp({"headless": False})
+_HEADLESS = os.environ.get("ISAAC_SIM_HEADLESS", "false").lower() == "true"
+simulation_app = SimulationApp({"headless": _HEADLESS, "hide_ui": False})
 
 import asyncio
-import os
 import sys
 import time
 import math
@@ -175,6 +176,10 @@ for ext in [
 ]:
     if not ext_manager.is_extension_enabled(ext):
         ext_manager.set_extension_enabled_immediate(ext, True)
+
+if _HEADLESS:
+    simulation_app.set_setting("/app/window/drawMouse", True)
+    ext_manager.set_extension_enabled_immediate("omni.kit.livestream.webrtc", True)
 
 
 def wait_for_stage(stage, timeout_s: float = 10.0):

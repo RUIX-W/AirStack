@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash -c \"source /home/worker/AirStack_0.18.0/airstack.sh 2>/dev/null; airstack help up\")"
+    ]
+  }
+}

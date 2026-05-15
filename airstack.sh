@@ -117,8 +117,12 @@ function print_command_help {
             echo "Usage: airstack up [service_name] [options]"
             echo ""
             echo "Options:"
-            echo "  --build       Build images before starting containers"
-            echo "  --recreate    Recreate containers even if their configuration and image haven't changed"
+            echo "  --build                Build images before starting containers"
+            echo "  --recreate             Recreate containers even if their configuration and image haven't changed"
+            echo "  --profile <mode>       Isaac Sim display mode (overrides COMPOSE_PROFILES for isaac-sim):"
+            echo "                           plain         — X11 display on your monitor (default)"
+            echo "                           webrtc-client — headless WebRTC stream, connect with your own client"
+            echo "                           webrtc-browser — headless WebRTC stream + browser viewer UI"
             ;;
         images)
             echo "Usage: airstack images"
@@ -730,6 +734,32 @@ function classify_compose_args {
 
 function cmd_up {
     check_docker
+
+    # Intercept --profile plain|webrtc|webrtc-client as Isaac Sim mode shortcuts.
+    # Any other --profile value is passed through to docker compose unchanged.
+    local isaac_mode=""
+    local filtered_args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --profile=plain|--profile=webrtc-client|--profile=webrtc-browser)
+                isaac_mode="${1#--profile=}"; shift ;;
+            --profile)
+                case "$2" in
+                    plain|webrtc-client|webrtc-browser) isaac_mode="$2"; shift 2 ;;
+                    *) filtered_args+=("$1" "$2"); shift 2 ;;
+                esac ;;
+            *) filtered_args+=("$1"); shift ;;
+        esac
+    done
+    set -- "${filtered_args[@]}"
+
+    if [[ -n "$isaac_mode" ]]; then
+        case "$isaac_mode" in
+            plain)          export COMPOSE_PROFILES="desktop,isaac-sim-local" ;;
+            webrtc-client)  export COMPOSE_PROFILES="desktop,isaac-sim-webrtc" ;;
+            webrtc-browser) export COMPOSE_PROFILES="desktop,isaac-sim-webrtc,isaac-sim-viewer" ;;
+        esac
+    fi
 
     local global_args=()
     local subcmd_args=()

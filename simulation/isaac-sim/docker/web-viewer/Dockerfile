@@ -15,10 +15,13 @@ RUN echo '@nvidia:registry=https://edge.urm.nvidia.com/artifactory/api/npm/omniv
 WORKDIR /app/web-viewer
 
 ARG ISAAC_SIM_WEBRTC_SIGNAL_PORT=49100
-ARG ISAAC_SIM_WEBRTC_STREAM_PORT=47998
 
+# omni.kit.livestream.webrtc uses a single WebSocket on the signal port (49100)
+# for both signaling and video. Do NOT set mediaServer/mediaPort — those belong
+# to the separate omni.kit.livestream.app extension (non-standalone ROS 2 path)
+# and would cause the client to try port 47998 which is never opened here.
 RUN sed -i "s/signalingServer: [^,]*/signalingServer: window.location.hostname/" src/main.ts \
-    && sed -i "/signalingServer:/a\\  signalingPort: ${ISAAC_SIM_WEBRTC_SIGNAL_PORT},\\n  mediaServer: window.location.hostname,\\n  mediaPort: ${ISAAC_SIM_WEBRTC_STREAM_PORT},\\n  forceWSS: false," src/main.ts
+    && sed -i "/signalingServer:/a\\  signalingPort: ${ISAAC_SIM_WEBRTC_SIGNAL_PORT},\\n  forceWSS: false," src/main.ts
 
 RUN npm install --ignore-scripts \
     && npm run build

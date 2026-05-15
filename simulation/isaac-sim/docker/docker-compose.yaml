@@ -1,7 +1,7 @@
 services:
   isaac-sim:
     profiles:
-      - isaac-sim-direct
+      - isaac-sim-local
     image: &image_tag ${PROJECT_DOCKER_REGISTRY}/${PROJECT_NAME}:v${VERSION}_isaac-sim
     build:
       context: ../
@@ -106,10 +106,7 @@ services:
       service: isaac-sim
     container_name: isaac-sim-webrtc
     profiles: !override
-      - isaac-sim
-      - webrtc
-    depends_on:
-      - isaac-sim-webrtc-viewer
+      - isaac-sim-webrtc
     network_mode: host
     networks: !reset null
     command: >
@@ -144,8 +141,7 @@ services:
   # http://<docker-host-ip>:8210; video still uses the host-networked WebRTC ports.
   isaac-sim-webrtc-viewer:
     profiles:
-      - isaac-sim
-      - webrtc
+      - isaac-sim-viewer
     build:
       context: ./web-viewer
       network: host
@@ -158,19 +154,12 @@ services:
       - bash
       - -lc
       - |
-        VIEWER_HOST="${ISAAC_SIM_WEBRTC_VIEWER_HOST:-}";
-        if [ -z "$$VIEWER_HOST" ]; then
-          VIEWER_HOST=$$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($$i == "src") {print $$(i+1); exit}}');
-        fi;
-        if [ -z "$$VIEWER_HOST" ]; then
-          VIEWER_HOST=$$(hostname -I | awk '{print $$1}');
-        fi;
-        exec npx vite preview --host "$$VIEWER_HOST" --port "${ISAAC_SIM_WEBRTC_VIEWER_PORT:-8210}" --strictPort
+        exec npx vite preview --host 0.0.0.0 --port "${ISAAC_SIM_WEBRTC_VIEWER_PORT:-8210}" --strictPort
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "VIEWER_HOST=\"$${ISAAC_SIM_WEBRTC_VIEWER_HOST:-}\"; if [ -z \"$$VIEWER_HOST\" ]; then VIEWER_HOST=$$(ip route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($$i == \"src\") {print $$(i+1); exit}}'); fi; if [ -z \"$$VIEWER_HOST\" ]; then VIEWER_HOST=$$(hostname -I | awk '{print $$1}'); fi; curl -f \"http://$$VIEWER_HOST:${ISAAC_SIM_WEBRTC_VIEWER_PORT:-8210}/\" || exit 1"
+          "curl -f http://127.0.0.1:${ISAAC_SIM_WEBRTC_VIEWER_PORT:-8210}/ || exit 1"
         ]
       interval: 30s
       timeout: 5s
