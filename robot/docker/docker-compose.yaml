@@ -6,6 +6,8 @@ services:
   robot-desktop:
     profiles:
       - desktop
+      - webrtc-client
+      - webrtc-browser
     extends:
       file: ./robot-base-docker-compose.yaml
       service: robot_base
