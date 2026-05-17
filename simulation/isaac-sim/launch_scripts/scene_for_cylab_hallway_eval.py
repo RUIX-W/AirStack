@@ -1,19 +1,21 @@
 #!/usr/bin/env python
 """
-Load a custom scene USD and spawn a built-in Pegasus/NVIDIA person that walks.
+Load the CyLab hallway evaluation scene, add a textured USD mesh plane, and
+spawn a built-in Pegasus/NVIDIA person that walks.
 
 Required:
     Set HARDCODED_SCENE_USD_PATH below, or use SCENE_USD_PATH=/path/to/scene.usd.
     If neither is set, the script uses AirStack's ISAAC_SIM_GUI value.
 
 Optional:
-    SCENE_LOAD_MODE=sublayer   # sublayer preserves the full USD, reference keeps old behavior
+    SCENE_LOAD_MODE=sublayer
     PERSON_NAME=person1
     PERSON_CHARACTER=original_male_adult_construction_05
     PERSON_START="0,0,0"
     PERSON_TARGET="5,0,0"
     PERSON_YAW=0.0
     PERSON_WALK_SPEED=1.0
+    MESH_PLANE_ALBEDO_PATH=/path/to/albedo.png
 
 Streaming:
     Set ISAAC_SIM_HEADLESS=true to run headless with WebRTC streaming on port 49100.
@@ -34,9 +36,12 @@ simulation_app = SimulationApp({"headless": _HEADLESS, "hide_ui": False})
 import omni.kit.app
 import omni.timeline
 import omni.usd
+import numpy as np
+from isaacsim.core.api.materials.omni_pbr import OmniPBR
 from isaacsim.core.utils.extensions import enable_extension
 from isaacsim.core.utils.viewports import set_camera_view
 from omni.isaac.core.world import World
+from pxr import Gf, Sdf, UsdGeom, UsdShade
 
 if _HEADLESS:
     simulation_app.set_setting("/app/window/drawMouse", True)
@@ -44,11 +49,11 @@ if _HEADLESS:
 
 
 # ---------------------------------------------------------------------------
-# Hardcode your scene/person settings here.
+# Hardcode your CyLab hallway/person/mesh-plane settings here.
 #
 # If HARDCODED_SCENE_USD_PATH is empty, the script falls back to SCENE_USD_PATH,
 # then AirStack's ISAAC_SIM_GUI.
-# Environment variables still override the person settings below.
+# Environment variables still override person settings and the albedo path.
 # ---------------------------------------------------------------------------
 HARDCODED_SCENE_USD_PATH = "omniverse://airlab-nucleus.andrew.cmu.edu/Users/ruiwang3/Rui_Office_Exp4.usd"
 HARDCODED_SCENE_LOAD_MODE = "sublayer"
@@ -56,8 +61,7 @@ HARDCODED_SCENE_LOAD_MODE = "sublayer"
 HARDCODED_PERSON_NAME = "person1"
 HARDCODED_PERSON_CHARACTER = "original_male_adult_construction_05"
 
-# Tune these for your scene. Z is usually 0.0 if the floor is at world origin.
-# The person walks in a straight line from START to TARGET.
+# Tune these for the hallway scene. Z is usually 0.0 if the floor is at origin.
 HARDCODED_PERSON_START = [-9.0, -10.5, 0.0]
 HARDCODED_PERSON_TARGET = [-4.4, -10.5, 0.0]
 HARDCODED_PERSON_YAW = 1.5708
@@ -65,6 +69,17 @@ HARDCODED_PERSON_WALK_SPEED = 1.0
 
 HARDCODED_CAMERA_EYE = [8.0, 8.0, 5.0]
 HARDCODED_CAMERA_TARGET = HARDCODED_PERSON_START
+
+HARDCODED_MESH_PLANE_ENABLED = True
+HARDCODED_MESH_PLANE_PATH = "/World/CyLabPatchEval/TexturedMeshPlane"
+HARDCODED_MESH_PLANE_MATERIAL_PATH = "/World/Looks/CyLabPatchEvalOmniPBR"
+HARDCODED_MESH_PLANE_CENTER = [-4.335, -9.425, 1.363]
+HARDCODED_MESH_PLANE_ORIENTATION_DEG = [90.0, 0.0, 0.0]
+HARDCODED_MESH_PLANE_SIZE = [1.0, 1.0]
+# Use a path mounted into the Isaac Sim container, or an omniverse:// URL.
+# HARDCODED_MESH_PLANE_ALBEDO_PATH = "omniverse://airlab-nucleus.andrew.cmu.edu/Users/ruiwang3/sim-patch.png"
+HARDCODED_MESH_PLANE_ALBEDO_PATH = ""
+HARDCODED_MESH_PLANE_TEXTURE_SCALE = [1.0, 1.0]
 
 
 PEOPLE_EXTENSIONS = [
@@ -162,7 +177,89 @@ def sublayer_scene(stage, scene_usd_path):
     wait_for_stage_updates()
 
 
-class WalkingPersonScene:
+def create_textured_mesh_plane(
+    stage,
+    prim_path,
+    material_path,
+    center,
+    orientation_deg,
+    size,
+    albedo_path,
+    texture_scale,
+):
+    half_x = float(size[0]) * 0.5
+    half_y = float(size[1]) * 0.5
+    center = [float(value) for value in center]
+    orientation_deg = [float(value) for value in orientation_deg]
+
+    mesh = UsdGeom.Mesh.Define(stage, prim_path)
+    mesh.CreatePointsAttr(
+        [
+            Gf.Vec3f(-half_x, -half_y, 0.0),
+            Gf.Vec3f(half_x, -half_y, 0.0),
+            Gf.Vec3f(half_x, half_y, 0.0),
+            Gf.Vec3f(-half_x, half_y, 0.0),
+        ]
+    )
+    mesh.CreateFaceVertexCountsAttr([4])
+    mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
+    mesh.CreateSubdivisionSchemeAttr("none")
+    mesh.CreateDoubleSidedAttr(True)
+    mesh.CreateNormalsAttr([Gf.Vec3f(0.0, 0.0, 1.0)] * 4)
+    mesh.SetNormalsInterpolation(UsdGeom.Tokens.faceVarying)
+
+    xformable = UsdGeom.Xformable(mesh.GetPrim())
+    xformable.ClearXformOpOrder()
+    xformable.AddTranslateOp().Set(Gf.Vec3d(*center))
+    xformable.AddRotateXYZOp().Set(Gf.Vec3f(*orientation_deg))
+
+    # UV corners span the whole quad, so one albedo image fills the patch.
+    primvars = UsdGeom.PrimvarsAPI(mesh.GetPrim())
+    st = primvars.CreatePrimvar(
+        "st",
+        Sdf.ValueTypeNames.TexCoord2fArray,
+        UsdGeom.Tokens.faceVarying,
+    )
+    st.Set(
+        [
+            Gf.Vec2f(0.0, 0.0),
+            Gf.Vec2f(1.0, 0.0),
+            Gf.Vec2f(1.0, 1.0),
+            Gf.Vec2f(0.0, 1.0),
+        ]
+    )
+    st.SetIndices([0, 1, 2, 3])
+
+    material_kwargs = {
+        "prim_path": material_path,
+        "name": "cylab_hallway_eval_omnipbr",
+        "color": np.array([2.0, 2.0, 2.0]),
+        "texture_scale": [1.0, 1.0],
+        "texture_translate": [0.0, 0.0],
+    }
+    if albedo_path:
+        material_kwargs["texture_path"] = albedo_path
+    OmniPBR(**material_kwargs)
+
+    material = UsdShade.Material.Get(stage, material_path)
+    material_prim = material.GetPrim()
+    for child in material_prim.GetChildren():
+        if child.GetTypeName() != "Shader":
+            continue
+
+        shader = UsdShade.Shader(child)
+        shader.CreateInput("project_uvw", Sdf.ValueTypeNames.Bool).Set(False)
+        shader.CreateInput("world_or_object", Sdf.ValueTypeNames.Bool).Set(False)
+        shader.CreateInput("uv_space_index", Sdf.ValueTypeNames.Int).Set(0)
+        shader.CreateInput("texture_scale", Sdf.ValueTypeNames.Float2).Set(Gf.Vec2f(*texture_scale))
+        shader.CreateInput("texture_translate", Sdf.ValueTypeNames.Float2).Set(Gf.Vec2f(0.0, 0.0))
+        shader.CreateInput("texture_rotate", Sdf.ValueTypeNames.Float).Set(0.0)
+
+    UsdShade.MaterialBindingAPI.Apply(mesh.GetPrim()).Bind(material)
+    return mesh
+
+
+class CyLabHallwayEvalScene:
     def __init__(self):
         scene_usd_path = (
             HARDCODED_SCENE_USD_PATH
@@ -203,7 +300,7 @@ class WalkingPersonScene:
         from pegasus.simulator.logic.people.person import Person
 
         # Use a fresh writable stage and compose the user's scene into it. Opening
-        # the Nucleus scene as the root layer can make the people/animation commands
+        # a Nucleus scene as the root layer can make people/animation commands
         # edit a generated metrics layer, which has crashed Kit in Isaac Sim 5.1.
         omni.usd.get_context().new_stage()
         self.stage = wait_for_stage()
@@ -223,6 +320,26 @@ class WalkingPersonScene:
         carb.log_warn(f"Scene contains {light_count} USD light prim(s) after loading.")
         if light_count == 0:
             carb.log_warn("No authored lights found in the composed scene; the viewport may look dark.")
+
+        if HARDCODED_MESH_PLANE_ENABLED:
+            albedo_path = os.environ.get(
+                "MESH_PLANE_ALBEDO_PATH",
+                HARDCODED_MESH_PLANE_ALBEDO_PATH,
+            )
+            carb.log_warn(
+                f"Creating mesh plane '{HARDCODED_MESH_PLANE_PATH}' with OmniPBR "
+                f"albedo map: {albedo_path or '<none>'}"
+            )
+            create_textured_mesh_plane(
+                self.stage,
+                HARDCODED_MESH_PLANE_PATH,
+                HARDCODED_MESH_PLANE_MATERIAL_PATH,
+                HARDCODED_MESH_PLANE_CENTER,
+                HARDCODED_MESH_PLANE_ORIENTATION_DEG,
+                HARDCODED_MESH_PLANE_SIZE,
+                albedo_path,
+                HARDCODED_MESH_PLANE_TEXTURE_SCALE,
+            )
 
         self.timeline = omni.timeline.get_timeline_interface()
         self.timeline.stop()
@@ -266,7 +383,7 @@ class WalkingPersonScene:
 
 def main():
     try:
-        WalkingPersonScene().run()
+        CyLabHallwayEvalScene().run()
     except Exception as exc:
         carb.log_error(str(exc))
         simulation_app.close()

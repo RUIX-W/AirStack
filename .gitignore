@@ -82,3 +82,6 @@ simulation/ms-airsim/assets/scenes/*
 
 # Test results
 tests/results/
+
+# VS Code
+.vscode

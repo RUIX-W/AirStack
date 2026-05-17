@@ -119,10 +119,7 @@ function print_command_help {
             echo "Options:"
             echo "  --build                Build images before starting containers"
             echo "  --recreate             Recreate containers even if their configuration and image haven't changed"
-            echo "  --profile <mode>       Isaac Sim display mode (overrides COMPOSE_PROFILES for isaac-sim):"
-            echo "                           plain         — X11 display on your monitor (default)"
-            echo "                           webrtc-client — headless WebRTC stream, connect with your own client"
-            echo "                           webrtc-browser — headless WebRTC stream + browser viewer UI"
+            echo "  --profile <name>       Docker Compose profile (for example: webrtc-client, webrtc-browser)"
             ;;
         images)
             echo "Usage: airstack images"
@@ -735,47 +732,41 @@ function classify_compose_args {
 function cmd_up {
     check_docker
 
-    # Intercept --profile plain|webrtc|webrtc-client as Isaac Sim mode shortcuts.
-    # Any other --profile value is passed through to docker compose unchanged.
-    local isaac_mode=""
-    local filtered_args=()
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --profile=plain|--profile=webrtc-client|--profile=webrtc-browser)
-                isaac_mode="${1#--profile=}"; shift ;;
-            --profile)
-                case "$2" in
-                    plain|webrtc-client|webrtc-browser) isaac_mode="$2"; shift 2 ;;
-                    *) filtered_args+=("$1" "$2"); shift 2 ;;
-                esac ;;
-            *) filtered_args+=("$1"); shift ;;
-        esac
-    done
-    set -- "${filtered_args[@]}"
-
-    if [[ -n "$isaac_mode" ]]; then
-        case "$isaac_mode" in
-            plain)          export COMPOSE_PROFILES="desktop,isaac-sim-local" ;;
-            webrtc-client)  export COMPOSE_PROFILES="desktop,isaac-sim-webrtc" ;;
-            webrtc-browser) export COMPOSE_PROFILES="desktop,isaac-sim-webrtc,isaac-sim-viewer" ;;
-        esac
-    fi
-
     local global_args=()
     local subcmd_args=()
     classify_compose_args global_args subcmd_args "$@"
 
+    local explicit_profiles=()
+    local i=0
+    while [ $i -lt ${#global_args[@]} ]; do
+        case "${global_args[$i]}" in
+            --profile)
+                i=$((i+1))
+                [ $i -lt ${#global_args[@]} ] && explicit_profiles+=("${global_args[$i]}")
+                ;;
+            --profile=*)
+                explicit_profiles+=("${global_args[$i]#--profile=}")
+                ;;
+        esac
+        i=$((i+1))
+    done
+
     # Ensure only one simulator profile is active
-    local p="${COMPOSE_PROFILES:-$(sed -n 's/^COMPOSE_PROFILES=//p' "$PROJECT_ROOT/.env" 2>/dev/null | tr -d '"')}"
-    for arg in "${global_args[@]}"; do p+=",${arg}"; done
-    local n=0; for s in isaac-sim ms-airsim simple; do [[ ",$p," == *",$s,"* ]] && n=$((n+1)); done
-    (( n > 1 )) && log_error "Only one simulator profile can be active at a time (isaac-sim, ms-airsim, simple)." && exit 1
+    local p
+    if [ ${#explicit_profiles[@]} -gt 0 ]; then
+        p="$(IFS=,; echo "${explicit_profiles[*]}")"
+    else
+        p="${COMPOSE_PROFILES:-$(sed -n 's/^AIRSTACK_DEFAULT_PROFILES=//p' "$PROJECT_ROOT/.env" 2>/dev/null | tr -d '"')}"
+        p="${p:-$(sed -n 's/^COMPOSE_PROFILES=//p' "$PROJECT_ROOT/.env" 2>/dev/null | tr -d '"')}"
+    fi
+    local n=0; for s in isaac-sim isaac-sim-local isaac-sim-webrtc webrtc-client webrtc-browser ms-airsim simple; do [[ ",$p," == *",$s,"* ]] && n=$((n+1)); done
+    (( n > 1 )) && log_error "Only one simulator profile can be active at a time (isaac-sim-local, isaac-sim-webrtc/webrtc-client/webrtc-browser, ms-airsim, simple)." && exit 1
 
     # Warn if URDF_FILE doesn't match the active simulator (env var overrides .env)
     local urdf="${URDF_FILE:-$(sed -n 's/^URDF_FILE=//p' "$PROJECT_ROOT/.env" 2>/dev/null | tr -d '"')}"
     if [[ -n "$urdf" ]]; then
         [[ ",$p," == *",ms-airsim,"* && "$urdf" != *.ms-airsim.* ]] && log_warn "URDF_FILE ($urdf) does not match ms-airsim profile. Expected *.ms-airsim.* URDF."
-        [[ ",$p," == *",isaac-sim,"* && "$urdf" != *.pegasus.* && "$urdf" != *.isaacsim.* ]] && log_warn "URDF_FILE ($urdf) does not match isaac-sim profile. Expected *.pegasus.* or *.isaacsim.* URDF."
+        [[ ( ",$p," == *",isaac-sim,"* || ",$p," == *",isaac-sim-local,"* || ",$p," == *",isaac-sim-webrtc,"* || ",$p," == *",webrtc-client,"* || ",$p," == *",webrtc-browser,"* ) && "$urdf" != *.pegasus.* && "$urdf" != *.isaacsim.* ]] && log_warn "URDF_FILE ($urdf) does not match isaac-sim profile. Expected *.pegasus.* or *.isaacsim.* URDF."
     fi
 
     # Add xhost + to allow GUI applications
@@ -786,12 +777,21 @@ function cmd_up {
     # when AIRSTACK_REGISTRY_CACHE is unset.
     if [[ "${AIRSTACK_REGISTRY_CACHE:-}" == "1" ]]; then
         log_info "AIRSTACK_REGISTRY_CACHE=1 → pulling images before up..."
-        run_docker_compose -f "$PROJECT_ROOT/docker-compose.yaml" "${global_args[@]}" pull --ignore-pull-failures "${subcmd_args[@]}" || \
-            log_warn "Pre-up pull encountered failures; continuing with whatever is local"
+        if [ ${#explicit_profiles[@]} -gt 0 ]; then
+            COMPOSE_PROFILES= run_docker_compose -f "$PROJECT_ROOT/docker-compose.yaml" "${global_args[@]}" pull --ignore-pull-failures "${subcmd_args[@]}" || \
+                log_warn "Pre-up pull encountered failures; continuing with whatever is local"
+        else
+            COMPOSE_PROFILES="$p" run_docker_compose -f "$PROJECT_ROOT/docker-compose.yaml" "${global_args[@]}" pull --ignore-pull-failures "${subcmd_args[@]}" || \
+                log_warn "Pre-up pull encountered failures; continuing with whatever is local"
+        fi
     fi
 
     log_info "Starting services..."
-    run_docker_compose -f "$PROJECT_ROOT/docker-compose.yaml" "${global_args[@]}" up "${subcmd_args[@]}" -d
+    if [ ${#explicit_profiles[@]} -gt 0 ]; then
+        COMPOSE_PROFILES= run_docker_compose -f "$PROJECT_ROOT/docker-compose.yaml" "${global_args[@]}" up "${subcmd_args[@]}" -d
+    else
+        COMPOSE_PROFILES="$p" run_docker_compose -f "$PROJECT_ROOT/docker-compose.yaml" "${global_args[@]}" up "${subcmd_args[@]}" -d
+    fi
     log_info "Services brought up successfully"
 }
 
