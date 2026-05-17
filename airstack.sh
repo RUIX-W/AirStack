@@ -756,8 +756,7 @@ function cmd_up {
     if [ ${#explicit_profiles[@]} -gt 0 ]; then
         p="$(IFS=,; echo "${explicit_profiles[*]}")"
     else
-        p="${COMPOSE_PROFILES:-$(sed -n 's/^AIRSTACK_DEFAULT_PROFILES=//p' "$PROJECT_ROOT/.env" 2>/dev/null | tr -d '"')}"
-        p="${p:-$(sed -n 's/^COMPOSE_PROFILES=//p' "$PROJECT_ROOT/.env" 2>/dev/null | tr -d '"')}"
+        p="${COMPOSE_PROFILES:-$(sed -n 's/^COMPOSE_PROFILES=//p' "$PROJECT_ROOT/.env" 2>/dev/null | tr -d '"')}"
     fi
     local n=0; for s in isaac-sim isaac-sim-local isaac-sim-webrtc webrtc-client webrtc-browser ms-airsim simple; do [[ ",$p," == *",$s,"* ]] && n=$((n+1)); done
     (( n > 1 )) && log_error "Only one simulator profile can be active at a time (isaac-sim-local, isaac-sim-webrtc/webrtc-client/webrtc-browser, ms-airsim, simple)." && exit 1
