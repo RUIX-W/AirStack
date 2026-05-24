@@ -49,7 +49,7 @@ from scene_prep import scale_stage_prim, add_colliders, add_dome_light, save_sce
 class MavlinkBackAndForthCommander(threading.Thread):
     """Daemon thread that arms the drone and flies it back and forth via MAVLink OFFBOARD.
 
-    Connects to PX4 SITL's GCS UDP port (14540 + vehicle_id).
+    Connects to PX4 SITL's GCS UDP port.
     Pre-streams setpoints, switches to OFFBOARD, arms, climbs to CRUISE_ALT,
     then sends sinusoidal SET_POSITION_TARGET_LOCAL_NED messages.
     """
@@ -58,13 +58,16 @@ class MavlinkBackAndForthCommander(threading.Thread):
     HALF_RANGE  = 4.0    # m amplitude
     PERIOD_S    = 12.0   # s per back-and-forth cycle
     SETPOINT_HZ = 20     # Hz stream rate for OFFBOARD to stay active
+    ARM_RETRY_S = 45.0   # PX4 may heartbeat before prearm checks are ready
 
-    def __init__(self, vehicle_id: int = 1):
+    def __init__(self, vehicle_id: int = 1, port: str | None = None):
         super().__init__(daemon=True)
         self._stop_evt = threading.Event()
         self._vehicle_id = vehicle_id
-        # GCS port: 14540 for vehicle 0, 14541 for vehicle 1, …
-        self._port = f"udpin:localhost:{14540 + vehicle_id}"
+        # Keep this on PX4's GCS/Normal link so MAVROS can own the onboard
+        # link at 14540 + vehicle_id when containers use host networking.
+        gcs_port = 14550 if port is None else port
+        self._port = f"udpin:localhost:{gcs_port}"
 
     def stop(self):
         self._stop_evt.set()
@@ -94,6 +97,28 @@ class MavlinkBackAndForthCommander(threading.Thread):
             0, 0,                        # yaw, yaw_rate
         )
 
+    def _drain_messages(self, conn):
+        while conn.recv_match(blocking=False) is not None:
+            pass
+
+    def _request_offboard(self, conn):
+        conn.mav.command_long_send(
+            conn.target_system, conn.target_component,
+            176,        # MAV_CMD_DO_SET_MODE
+            0,
+            1,          # MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
+            6,          # PX4 OFFBOARD custom mode
+            0, 0, 0, 0, 0,
+        )
+
+    def _request_arm(self, conn):
+        conn.mav.command_long_send(
+            conn.target_system, conn.target_component,
+            400,        # MAV_CMD_COMPONENT_ARM_DISARM
+            0,
+            1, 0, 0, 0, 0, 0, 0,
+        )
+
     def run(self):
         conn = self._connect()
         if conn is None:
@@ -109,28 +134,17 @@ class MavlinkBackAndForthCommander(threading.Thread):
             self._send_sp(conn, 0.0, 0.0, -self.CRUISE_ALT)
             time.sleep(dt)
 
-        # Switch to OFFBOARD
-        conn.mav.command_long_send(
-            conn.target_system, conn.target_component,
-            176,        # MAV_CMD_DO_SET_MODE
-            0,
-            1,          # MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
-            6,          # PX4 OFFBOARD custom mode
-            0, 0, 0, 0, 0,
-        )
-        time.sleep(0.5)
-
-        # Arm
-        conn.mav.command_long_send(
-            conn.target_system, conn.target_component,
-            400,        # MAV_CMD_COMPONENT_ARM_DISARM
-            0,
-            1, 0, 0, 0, 0, 0, 0,
-        )
-        carb.log_warn("[commander] Armed — climbing …")
+        carb.log_warn("[commander] Requesting OFFBOARD/arm while climbing …")
 
         t = 0.0
+        next_command_t = 0.0
         while not self._stop_evt.is_set():
+            self._drain_messages(conn)
+            if t <= self.ARM_RETRY_S and t >= next_command_t:
+                self._request_offboard(conn)
+                self._request_arm(conn)
+                next_command_t += 1.0
+
             if t < 5.0:
                 # Climb phase
                 self._send_sp(conn, 0.0, 0.0, -self.CRUISE_ALT)
@@ -296,7 +310,8 @@ class PegasusApp:
 
         # Start the MAVLink back-and-forth commander in the background.
         # It will connect once PX4 SITL is up and the sim is playing.
-        self.commander = MavlinkBackAndForthCommander(vehicle_id=1)
+        commander_port = os.environ.get("MAVLINK_COMMANDER_PORT")
+        self.commander = MavlinkBackAndForthCommander(vehicle_id=1, port=commander_port)
         self.commander.start()
 
     def run(self):

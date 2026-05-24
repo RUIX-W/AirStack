@@ -22,6 +22,11 @@ Optional:
     DRONE_DOMAIN_ID=1
     DRONE_ENABLE_ZED=true
     DRONE_ENABLE_OUSTER=true
+    DEMO_COMMANDER_ENABLED=true
+    DEMO_COMMANDER_Y_OFFSET=2.0
+    DEMO_COMMANDER_TAKEOFF_ALTITUDE=2.0
+    DEMO_COMMANDER_Y_OFFSET=2.0
+    MAVLINK_COMMANDER_PORT=14550
     MESH_PLANE_ALBEDO_PATH=/path/to/albedo.png
 
 Streaming:
@@ -30,6 +35,7 @@ Streaming:
 """
 
 import os
+import threading
 import time
 
 import carb
@@ -102,6 +108,9 @@ HARDCODED_DRONE_INIT_POS = [-6.8, -6.3, 0.07]
 HARDCODED_DRONE_INIT_ORIENT = [0.0, 0.0, -0.7071, 0.7071]
 HARDCODED_DRONE_ENABLE_ZED = True
 HARDCODED_DRONE_ENABLE_OUSTER = True
+HARDCODED_DEMO_COMMANDER_ENABLED = True
+HARDCODED_DEMO_COMMANDER_TAKEOFF_ALTITUDE = 2.0
+HARDCODED_DEMO_COMMANDER_Y_OFFSET = 2.0
 
 
 PEOPLE_EXTENSIONS = [
@@ -155,6 +164,120 @@ class StraightLinePersonController:
 
     def reset(self):
         pass
+
+
+class MavlinkMoveYCommander(threading.Thread):
+    """Simple PX4 OFFBOARD demo that moves to local NED y=+offset."""
+
+    SETPOINT_HZ = 20
+
+    def __init__(
+        self,
+        vehicle_id: int = 1,
+        port: str | None = None,
+        y_offset: float = HARDCODED_DEMO_COMMANDER_Y_OFFSET,
+        takeoff_altitude: float = HARDCODED_DEMO_COMMANDER_TAKEOFF_ALTITUDE,
+    ):
+        super().__init__(daemon=True)
+        self._stop_evt = threading.Event()
+        self._vehicle_id = vehicle_id
+        self._y_offset = float(y_offset)
+        self._takeoff_altitude = float(takeoff_altitude)
+        gcs_port = 14550 if port is None else port
+        self._port = f"udpin:localhost:{gcs_port}"
+
+    def stop(self):
+        self._stop_evt.set()
+
+    def _connect(self):
+        try:
+            from pymavlink import mavutil
+        except ImportError:
+            carb.log_error("pymavlink not installed; MAVLink demo commander disabled.")
+            return None
+
+        conn = mavutil.mavlink_connection(self._port)
+        conn.wait_heartbeat(timeout=30)
+        carb.log_warn(f"[move-y-demo] Connected to PX4 on {self._port}")
+        return conn
+
+    def _send_position_target(self, conn, x, y, z_ned):
+        conn.mav.set_position_target_local_ned_send(
+            0,
+            conn.target_system,
+            conn.target_component,
+            1,                  # MAV_FRAME_LOCAL_NED
+            0b0000111111111000, # position only
+            x,
+            y,
+            z_ned,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+
+    def run(self):
+        conn = self._connect()
+        if conn is None:
+            return
+
+        dt = 1.0 / self.SETPOINT_HZ
+        z_ned = -self._takeoff_altitude
+
+        carb.log_warn(
+            f"[move-y-demo] Pre-streaming takeoff target x=0.0 y=0.0 z={z_ned}"
+        )
+        for _ in range(int(self.SETPOINT_HZ * 2)):
+            if self._stop_evt.is_set():
+                return
+            self._send_position_target(conn, 0.0, 0.0, z_ned)
+            time.sleep(dt)
+
+        conn.mav.command_long_send(
+            conn.target_system,
+            conn.target_component,
+            176, # MAV_CMD_DO_SET_MODE
+            0,
+            1,   # MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
+            6,   # PX4 OFFBOARD custom mode
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+        time.sleep(0.5)
+        conn.mav.command_long_send(
+            conn.target_system,
+            conn.target_component,
+            400, # MAV_CMD_COMPONENT_ARM_DISARM
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+        carb.log_warn("[move-y-demo] Armed; taking off to 2.0 m.")
+
+        for _ in range(int(self.SETPOINT_HZ * 5)):
+            if self._stop_evt.is_set():
+                return
+            self._send_position_target(conn, 0.0, 0.0, z_ned)
+            time.sleep(dt)
+
+        carb.log_warn(f"[move-y-demo] Moving to y={self._y_offset} at 2.0 m.")
+
+        while not self._stop_evt.is_set():
+            self._send_position_target(conn, 0.0, self._y_offset, z_ned)
+            time.sleep(dt)
 
 
 def parse_vec3(value: str, default):
@@ -294,6 +417,7 @@ def create_textured_mesh_plane(
 
 class CyLabHallwayEvalScene:
     def __init__(self):
+        self.demo_commander = None
         scene_usd_path = (
             HARDCODED_SCENE_USD_PATH
             or os.environ.get("SCENE_USD_PATH", "")
@@ -439,6 +563,31 @@ class CyLabHallwayEvalScene:
                     lidar_min_range=0.75,
                 )
 
+            demo_enabled = os.environ.get(
+                "DEMO_COMMANDER_ENABLED",
+                str(HARDCODED_DEMO_COMMANDER_ENABLED),
+            ).lower() == "true"
+            if demo_enabled:
+                commander_port = os.environ.get("MAVLINK_COMMANDER_PORT")
+                y_offset = float(
+                    os.environ.get(
+                        "DEMO_COMMANDER_Y_OFFSET",
+                        str(HARDCODED_DEMO_COMMANDER_Y_OFFSET),
+                    )
+                )
+                takeoff_altitude = float(
+                    os.environ.get(
+                        "DEMO_COMMANDER_TAKEOFF_ALTITUDE",
+                        str(HARDCODED_DEMO_COMMANDER_TAKEOFF_ALTITUDE),
+                    )
+                )
+                self.demo_commander = MavlinkMoveYCommander(
+                    vehicle_id=drone_vehicle_id,
+                    port=commander_port,
+                    y_offset=y_offset,
+                    takeoff_altitude=takeoff_altitude,
+                )
+
         carb.log_warn(
             f"Spawning person '{self.person_name}' using character "
             f"'{self.person_character}' at {self.person_start}"
@@ -462,6 +611,8 @@ class CyLabHallwayEvalScene:
 
     def run(self):
         self.timeline.play()
+        if self.demo_commander is not None and not self.demo_commander.is_alive():
+            self.demo_commander.start()
         self.person.update_target_position(self.person_target, self.person_walk_speed)
 
         app = omni.kit.app.get_app()
@@ -476,6 +627,8 @@ class CyLabHallwayEvalScene:
                 app.update()
 
         self.timeline.stop()
+        if self.demo_commander is not None:
+            self.demo_commander.stop()
         simulation_app.close()
 
 
